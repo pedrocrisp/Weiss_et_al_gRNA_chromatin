@@ -1,0 +1,115 @@
+---
+title: "Cas9-NGG-all-gRNAs-TAIR10"
+author: "Peter Crisp"
+date: "06/11/2018"
+output: html_document
+---
+
+# Overview:
+
+Summary of workflow to identify all gRNAs and identify gRNAs that target multiple sites in the genome.
+
+Aims Filter gRNAs:
+
+1. gRNA should not have more than 4 repeat bases in a row
+2. gRNA should have between 40-60% GC content
+3. Restriction enzyme should sit 3bp upstream from the PAM site. 
+4. gRNAs hitting the organelles should be excluded (remember to check again at the end for organelle off targets?)
+
+Other characteristics of gRNAs:
+5. gRNA should be scattered throughout the genome # of chromosomes targeted
+6. Different gRNA targets need to be distinguishable by PCR - need some SNPs etc
+
+Chromatin diversity
+7. gRNA should have CG, CHG, and/or CHH (different methylation domains)
+8. gRNA should sit in regions of differing histone mods
+9. Accessible and closed chromatin (ATACseq data)
+[10. gRNA should sit in regions of differing nucleosome positions]
+
+# 1.Cas9 NGG 
+## A. Counting gRNAs genome-wide
+
+Tally all 23mers ending in NGG
+
+Check what to do about organelles: We want to exclude anything hitting the organelles.
+
+Requires seqkit and csvtk and tdyverse
+
+Usage:
+
+http://bioinf.shenwei.me/csvtk/usage/#freq
+
+http://bioinf.shenwei.me/seqkit/usage/#locate
+
+### Count all gRNAs
+
+```{r, engine = 'bash'}
+
+# make a fasta file of the motifs to search for
+cat contexts_motifs.fa
+> 20nt_NGG
+NNNNNNNNNNNNNNNNNNNNNGG
+
+# identify 20nt_NGG motifs
+cat ~/ws/refseqs/arabidopsis/TAIR10/TAIR10_chr_all.fas | \
+seqkit locate -i -d -f contexts_motifs.fa \
+> TAIR10_20ntgRNA_NGG_motifs.txt
+wc -l TAIR10_20ntgRNA_NGG_motifs.txt
+
+# frequency of each distinct motif
+cat TAIR10_20ntgRNA_NGG_motifs.txt | \
+csvtk -t freq -k -f 7 \
+> TAIR10_20ntgRNA_NGG_motifs_freq.txt
+
+wc -l TAIR10_20ntgRNA_NGG_motifs_freq.txt
+
+# distribution of frequencies
+tail -n +2 TAIR10_20ntgRNA_NGG_motifs_freq.txt | \
+csvtk -t freq -k -f 2 \
+> TAIR10_20ntgRNA_NGG_motifs_freq_summary.txt
+
+# get list of gRNAs that match organelles
+
+grep -E 'mitochondria|chloroplast' TAIR10_20ntgRNA_NGG_motifs.txt > organelle_gRNAs.txt
+
+```
+
+#### Example: Pull 10 hit gRNAs
+
+```{r}
+
+motifs_freq <- read_tsv("gRNA_distributions_Cas9/TAIR10_20ntgRNA_NGG_motifs_freq.txt")
+
+motifs_freq
+
+motifs_freq_10 <- motifs_freq %>% filter(frequency == 10)
+
+write_csv(motifs_freq_10, "gRNA_distributions_Cas9/TAIR10_20ntgRNA_NGG_motifs_freq_10_hits.csv")
+
+# 300
+motifs_freq %>% filter(frequency > 300)
+
+```
+
+## B. Filtering the gRNAs
+
+```{r}
+
+motifs_freq <- read_tsv("gRNA_distributions_Cas9/TAIR10_20ntgRNA_NGG_motifs_freq.txt")
+
+organelle_gRNAs <-  read_tsv("gRNA_distributions_Cas9/organelle_gRNAs.txt", col_names = F)
+
+motifs_freq
+
+motifs_freq_repeats <- motifs_freq  %>% # 7,376,476 
+  filter(frequency %in% c(7:25)) %>% # keep gRNA that hit genome 7:25 times # 19,161
+  filter(!grepl('AAAAA|TTTTT|GGGGG|CCCCC', matched)) %>% # remove simple repeats # 17,391
+  mutate(GC_content = map(matched, ~ unlist(GC(s2c(.))))) %>% unnest() %>% # add GC content
+  filter(GC_content >=0.4 & GC_content <=0.6) %>% # GC 40-60% # 9,914
+  filter(!matched %in% organelle_gRNAs$X7) # remove gRNAs matching the organelles # 9,902
+
+motifs_freq_repeats    
+
+write_tsv(motifs_freq_repeats, "gRNA_distributions_Cas9/TAIR10_20ntgRNA_NGG_motifs_filter1.txt")
+
+```
